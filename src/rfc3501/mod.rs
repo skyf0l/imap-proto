@@ -993,13 +993,40 @@ fn msg_att_threadid(i: &[u8]) -> IResult<&[u8], AttributeValue<'_>> {
 // RFC 8970 §6 — PREVIEW
 //   msg-att-dynamic =/ "PREVIEW" SP nstring
 // A server sends NIL only to a request with the LAZY modifier, when it cannot
-// produce the preview without delay.  We map NIL → `None`.
+// produce the preview without delay.  We map NIL → `None`.  A quoted preview
+// is unescaped, so `\"` and `\\` reach the caller as `"` and `\`; a literal
+// carries its text as is.
 fn msg_att_preview(i: &[u8]) -> IResult<&[u8], AttributeValue<'_>> {
     map(
-        preceded(tag_no_case("PREVIEW "), nstring_utf8),
+        preceded(
+            tag_no_case("PREVIEW "),
+            alt((
+                map(nil, |_| None),
+                map(quoted, |raw| Some(unescape_quoted(raw))),
+                map(literal, |raw| Some(String::from_utf8_lossy(raw))),
+            )),
+        ),
         AttributeValue::Preview,
     )
     .parse(i)
+}
+
+// The text of a quoted string with its backslash escapes removed.
+fn unescape_quoted(raw: &[u8]) -> Cow<'_, str> {
+    if !raw.contains(&b'\\') {
+        return String::from_utf8_lossy(raw);
+    }
+    let mut bytes = Vec::with_capacity(raw.len());
+    let mut escaped = false;
+    for &byte in raw {
+        if byte == b'\\' && !escaped {
+            escaped = true;
+            continue;
+        }
+        escaped = false;
+        bytes.push(byte);
+    }
+    Cow::Owned(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 // Catch-all for RFC extension attributes not explicitly handled above.
